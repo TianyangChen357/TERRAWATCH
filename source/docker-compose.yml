@@ -1,0 +1,8 @@
+services:
+  terrawatch:
+    build:
+      context: .
+    container_name: terrawatch
+    restart: unless-stopped
+    ports:
+      - "8080:80"
