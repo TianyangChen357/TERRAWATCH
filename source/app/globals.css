@@ -58,6 +58,10 @@ button {
   --signal: #70f0ca;
 }
 
+.channel-currents {
+  --signal: #55c9ff;
+}
+
 .channel-events {
   --signal: #ffcf5c;
 }
@@ -131,6 +135,12 @@ button {
   filter:
     drop-shadow(0 0 2px rgba(155, 255, 229, 0.34))
     drop-shadow(0 0 7px rgba(112, 240, 202, 0.12));
+}
+
+.vector-currents {
+  filter:
+    drop-shadow(0 0 2px rgba(85, 201, 255, 0.4))
+    drop-shadow(0 0 8px rgba(55, 150, 255, 0.16));
 }
 
 .phenomena-field {
@@ -1552,16 +1562,35 @@ button {
 
 @media (max-width: 760px) {
   .console {
-    min-height: 560px;
+    height: 100dvh;
+    min-height: 0;
   }
 
   .topbar {
-    height: 72px;
-    padding: 0 18px;
+    height: calc(66px + env(safe-area-inset-top));
+    padding: env(safe-area-inset-top) 14px 0;
   }
 
   .brand-lockup h1 {
-    font-size: 15px;
+    font-size: 14px;
+    letter-spacing: 0.17em;
+  }
+
+  .brand-lockup {
+    gap: 10px;
+  }
+
+  .brand-mark {
+    width: 32px;
+    height: 32px;
+  }
+
+  .brand-mark::before {
+    width: 38px;
+  }
+
+  .brand-mark::after {
+    height: 38px;
   }
 
   .brand-lockup p,
@@ -1573,14 +1602,20 @@ button {
     font-size: 7px;
   }
 
+  .earth-time-orbit {
+    display: none;
+  }
+
   .channel-readout {
-    top: 96px;
-    left: 18px;
-    width: 250px;
+    top: calc(84px + env(safe-area-inset-top));
+    left: 14px;
+    width: min(190px, 52vw);
   }
 
   .channel-readout h2 {
-    font-size: 31px;
+    margin-top: 7px;
+    font-size: clamp(24px, 8vw, 31px);
+    line-height: 1.05;
   }
 
   .readout-signal-row {
@@ -1600,15 +1635,18 @@ button {
   }
 
   .latest-readout {
-    width: 235px;
+    width: min(190px, 52vw);
+    padding: 8px 9px;
   }
 
   .channel-wheel {
     --wheel-slot: 54px;
     --wheel-radius: 65px;
-    right: 4px;
-    width: 194px;
-    height: 320px;
+    top: 45%;
+    right: -6px;
+    width: min(190px, 51vw);
+    height: min(320px, 43dvh);
+    transform: translateY(-45%);
   }
 
   .wheel-copy b {
@@ -1621,9 +1659,7 @@ button {
   }
 
   .telemetry-panel {
-    left: 18px;
-    bottom: 238px;
-    width: min(285px, calc(100vw - 36px));
+    display: none;
   }
 
   .signal-chart {
@@ -1631,16 +1667,19 @@ button {
   }
 
   .event-card {
-    left: 18px;
-    bottom: 220px;
-    width: min(360px, calc(100vw - 36px));
+    left: 12px;
+    bottom: calc(190px + env(safe-area-inset-bottom));
+    width: calc(100vw - 24px);
+    max-height: 34dvh;
+    padding: 14px 16px 16px;
+    overflow: auto;
   }
 
   .region-controls {
     left: auto;
-    right: 12px;
-    bottom: 52px;
-    width: min(260px, calc(100vw - 24px));
+    right: 10px;
+    bottom: calc(43px + env(safe-area-inset-bottom));
+    width: min(235px, calc(100vw - 20px));
     transform: none;
   }
 
@@ -1653,8 +1692,8 @@ button {
   }
 
   .bottombar {
-    height: 39px;
-    padding: 0 18px;
+    height: calc(36px + env(safe-area-inset-bottom));
+    padding: 0 12px env(safe-area-inset-bottom);
   }
 
   .bottombar p:last-child {
@@ -1662,7 +1701,9 @@ button {
   }
 
   .reticle {
-    left: 44%;
+    left: 40%;
+    width: 58px;
+    height: 58px;
   }
 }
 
@@ -1676,6 +1717,46 @@ button {
 
   .region-controls {
     width: min(270px, calc(100vw - 24px));
+  }
+}
+
+@media (max-width: 760px) and (max-height: 500px) and (orientation: landscape) {
+  .topbar {
+    height: calc(52px + env(safe-area-inset-top));
+  }
+
+  .channel-readout {
+    top: calc(64px + env(safe-area-inset-top));
+    width: 180px;
+  }
+
+  .latest-readout {
+    display: none;
+  }
+
+  .channel-wheel {
+    top: 51%;
+    right: 10px;
+    width: 190px;
+    height: 230px;
+    transform: translateY(-50%);
+  }
+
+  .region-controls {
+    right: auto;
+    left: 10px;
+    bottom: calc(40px + env(safe-area-inset-bottom));
+    width: 175px;
+  }
+
+  .world-navigator-copy {
+    display: none;
+  }
+
+  .event-card {
+    bottom: calc(42px + env(safe-area-inset-bottom));
+    width: calc(100vw - 220px);
+    max-height: 52dvh;
   }
 }
 

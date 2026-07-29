@@ -17,8 +17,8 @@ export const metadata: Metadata = {
   description:
     "An animated, bilingual console for exploring global satellite imagery, clouds, precipitation, land-surface temperature, simulated wind, and live Earth events.",
   icons: {
-    icon: "/favicon.svg",
-    shortcut: "/favicon.svg",
+    icon: "/terrawatch/favicon.svg",
+    shortcut: "/terrawatch/favicon.svg",
   },
 };
 

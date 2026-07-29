@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import maplibregl, { Map as MapLibreMap, MapMouseEvent } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 
-type ChannelId = "satellite" | "cloud" | "rain" | "heat" | "wind" | "events";
+type ChannelId = "satellite" | "cloud" | "rain" | "heat" | "wind" | "currents" | "events";
 
 type Channel = {
   id: ChannelId;
@@ -69,13 +69,13 @@ type MapContainerElement = HTMLDivElement & {
 
 const CHANNELS: Channel[] = [
   {
-    id: "satellite",
+    id: "events",
     code: "01",
-    name: "全彩卫星图",
-    subtitle: "TRUE-COLOR SATELLITE",
-    source: "NASA GIBS · BLUE MARBLE",
-    latency: "全彩无云合成 · 基础视图",
-    color: "#b9f4ff",
+    name: "地球事件",
+    subtitle: "EARTH EVENTS",
+    source: "USGS + NASA EONET",
+    latency: "实时流 / 人工整理源并存",
+    color: "#ffcf5c",
   },
   {
     id: "cloud",
@@ -125,20 +125,20 @@ const CHANNELS: Channel[] = [
   {
     id: "wind",
     code: "05",
-    name: "模拟风场",
-    subtitle: "SIMULATED WIND FIELD",
-    source: "TERRAWATCH · 视觉原型",
-    latency: "地理锚定模拟 · 非实测风速",
+    name: "全球风场",
+    subtitle: "NOAA GLOBAL WIND",
+    source: "NOAA GFS · 10 M WIND",
+    latency: "模式分析 · 每日四次更新",
     color: "#70f0ca",
   },
   {
-    id: "events",
+    id: "currents",
     code: "06",
-    name: "地球事件",
-    subtitle: "EARTH EVENTS",
-    source: "USGS + NASA EONET",
-    latency: "实时流 / 人工整理源并存",
-    color: "#ffcf5c",
+    name: "表层洋流",
+    subtitle: "OCEAN SURFACE CURRENTS",
+    source: "NASA/JPL · OSCAR NRT",
+    latency: "近实时分析 · 约两天延迟",
+    color: "#55c9ff",
   },
 ];
 
@@ -749,7 +749,7 @@ function ChannelSignalIcon({ channel }: { channel: ChannelId }) {
             />
           </>
         )}
-        {channel === "wind" && (
+        {(channel === "wind" || channel === "currents") && (
           <>
             <path
               className="signal-stroke signal-wind-line signal-wind-line-a"
@@ -808,64 +808,97 @@ function wrapLongitude(value: number) {
   return ((((value + 180) % 360) + 360) % 360) - 180;
 }
 
-function windVector(lng: number, lat: number, time: number) {
-  const safeLat = Math.max(-82, Math.min(82, lat));
-  const normalizedLng = wrapLongitude(lng);
-  const longitude = (normalizedLng * Math.PI) / 180;
-  const latitude = (safeLat * Math.PI) / 180;
-  const absoluteLatitude = Math.abs(safeLat);
-  const phase = time * 0.000018;
-  const gaussian = (distance: number, width: number) =>
-    Math.exp(-Math.pow(distance / width, 2));
+type VectorGridPayload = {
+  schema: "terrawatch-vector-grid-v1";
+  source: string;
+  sourceUrl: string;
+  generatedAt: string;
+  validTime: string;
+  latency: string;
+  units: string;
+  width: number;
+  height: number;
+  longitudeStart: number;
+  latitudeStart: number;
+  longitudeStep: number;
+  latitudeStep: number;
+  scale: number;
+  missing: number;
+  u: string;
+  v: string;
+};
 
-  // Broad planetary circulation: tropical easterlies, mid-latitude
-  // westerlies and weaker polar easterlies.
-  let u =
-    -0.92 * gaussian(absoluteLatitude - 16, 13) +
-    1.18 * gaussian(absoluteLatitude - 47, 17) -
-    0.48 * gaussian(absoluteLatitude - 76, 10);
-  let v =
-    0.2 * Math.sin(longitude * 2.2 + phase + latitude * 1.7) *
-    Math.cos(latitude);
+type VectorGrid = Omit<VectorGridPayload, "u" | "v"> & {
+  u: Int16Array;
+  v: Int16Array;
+};
 
-  // Long planetary waves stop each latitude band from looking like a
-  // perfectly uniform conveyor belt.
-  u += 0.24 * Math.sin(longitude * 2.7 - latitude * 2.1 + phase);
-  v += 0.18 * Math.cos(longitude * 1.9 + latitude * 3.4 - phase * 0.7);
-
-  const vortices = [
-    { lng: -152, lat: 43, spin: 1, radius: 31, power: 1.1 },
-    { lng: -34, lat: 51, spin: 1, radius: 25, power: 1.0 },
-    { lng: 78, lat: -42, spin: -1, radius: 32, power: 1.05 },
-    { lng: 132, lat: 24, spin: -1, radius: 22, power: 0.82 },
-  ];
-
-  vortices.forEach((vortex, index) => {
-    const driftingLng = vortex.lng + Math.sin(phase * 0.32 + index) * 3;
-    const dx =
-      wrapLongitude(normalizedLng - driftingLng) *
-      Math.cos((vortex.lat * Math.PI) / 180);
-    const dy = safeLat - vortex.lat;
-    const distance = Math.hypot(dx, dy);
-    const influence = Math.exp(-Math.pow(distance / vortex.radius, 2));
-    const tangentX = distance > 0.001 ? -dy / distance : 0;
-    const tangentY = distance > 0.001 ? dx / distance : 0;
-    u += tangentX * vortex.spin * vortex.power * influence;
-    v += tangentY * vortex.spin * vortex.power * influence;
-  });
-
-  const strength = Math.max(0.18, Math.hypot(u, v));
-  return { u, v, strength };
+function decodeComponent(encoded: string) {
+  const binary = window.atob(encoded);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return new Int16Array(bytes.buffer);
 }
 
-function WindFieldCanvas({
+function decodeVectorGrid(payload: VectorGridPayload): VectorGrid {
+  if (payload.schema !== "terrawatch-vector-grid-v1") {
+    throw new Error("unsupported vector grid schema");
+  }
+  const u = decodeComponent(payload.u);
+  const v = decodeComponent(payload.v);
+  if (u.length !== payload.width * payload.height || v.length !== u.length) {
+    throw new Error("invalid vector grid dimensions");
+  }
+  return { ...payload, u, v };
+}
+
+function sampleVector(grid: VectorGrid, lng: number, lat: number) {
+  const longitudeSpan = grid.width * grid.longitudeStep;
+  const normalizedLongitude =
+    ((((lng - grid.longitudeStart) % longitudeSpan) + longitudeSpan) % longitudeSpan) /
+    grid.longitudeStep;
+  const latitudePosition = (lat - grid.latitudeStart) / grid.latitudeStep;
+  if (latitudePosition < 0 || latitudePosition > grid.height - 1) return null;
+
+  const x0 = Math.floor(normalizedLongitude) % grid.width;
+  const x1 = (x0 + 1) % grid.width;
+  const y0 = Math.min(grid.height - 1, Math.floor(latitudePosition));
+  const y1 = Math.min(grid.height - 1, y0 + 1);
+  const tx = normalizedLongitude - Math.floor(normalizedLongitude);
+  const ty = latitudePosition - y0;
+  const indexes = [
+    y0 * grid.width + x0,
+    y0 * grid.width + x1,
+    y1 * grid.width + x0,
+    y1 * grid.width + x1,
+  ];
+  if (indexes.some((index) => grid.u[index] === grid.missing || grid.v[index] === grid.missing)) {
+    return null;
+  }
+  const interpolate = (values: Int16Array) => {
+    const top = values[indexes[0]] * (1 - tx) + values[indexes[1]] * tx;
+    const bottom = values[indexes[2]] * (1 - tx) + values[indexes[3]] * tx;
+    return (top * (1 - ty) + bottom * ty) * grid.scale;
+  };
+  const u = interpolate(grid.u);
+  const v = interpolate(grid.v);
+  return { u, v, strength: Math.hypot(u, v) };
+}
+
+function VectorFieldCanvas({
   map,
   view,
   reduceMotion,
+  grid,
+  mode,
 }: {
   map: MapLibreMap | null;
   view: { zoom: number; lng: number; lat: number };
   reduceMotion: boolean;
+  grid: VectorGrid;
+  mode: "wind" | "currents";
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -906,9 +939,10 @@ function WindFieldCanvas({
       };
     };
 
-    const fieldDirection = (x: number, y: number, time: number) => {
+    const fieldDirection = (x: number, y: number) => {
       const coordinate = screenToGeo(x, y);
-      const vector = windVector(coordinate.lng, coordinate.lat, time);
+      const vector = sampleVector(grid, coordinate.lng, coordinate.lat);
+      if (!vector || vector.strength < 0.001) return null;
 
       if (!map) {
         const length = Math.max(0.001, Math.hypot(vector.u, vector.v));
@@ -934,7 +968,7 @@ function WindFieldCanvas({
       };
     };
 
-    const drawStaticField = (time: number) => {
+    const drawStaticField = () => {
       const width = canvas.clientWidth;
       const height = canvas.clientHeight;
       context.clearRect(0, 0, width, height);
@@ -943,8 +977,9 @@ function WindFieldCanvas({
 
       for (let y = 28; y < height; y += 48) {
         for (let x = 24 + ((y / 48) % 2) * 20; x < width; x += 52) {
-          const direction = fieldDirection(x, y, time);
-          const strength = Math.min(1, direction.strength / 1.7);
+          const direction = fieldDirection(x, y);
+          if (!direction) continue;
+          const strength = Math.min(1, direction.strength / (mode === "wind" ? 30 : 1.5));
           const length = 7 + strength * 10;
           context.strokeStyle = `rgba(174, 255, 234, ${0.25 + strength * 0.24})`;
           context.lineWidth = 0.85 + strength * 0.45;
@@ -988,7 +1023,7 @@ function WindFieldCanvas({
       }
       if (particles.length > targetCount) particles.length = targetCount;
       viewChanged = true;
-      if (reduceMotion) drawStaticField(performance.now());
+      if (reduceMotion) drawStaticField();
     };
 
     const markViewChanged = () => {
@@ -997,7 +1032,7 @@ function WindFieldCanvas({
 
     const draw = (time: number) => {
       if (reduceMotion) {
-        drawStaticField(time);
+        drawStaticField();
         return;
       }
       if (time - previousFrame < 1000 / 48) {
@@ -1023,21 +1058,28 @@ function WindFieldCanvas({
       particles.forEach((particle, index) => {
         const px = particle.x;
         const py = particle.y;
-        const direction = fieldDirection(particle.x, particle.y, time);
+        const direction = fieldDirection(particle.x, particle.y);
+        if (!direction) {
+          reset(particle);
+          return;
+        }
+        const visualMaximum = mode === "wind" ? 30 : 1.5;
+        const visualStrength = Math.min(1, direction.strength / visualMaximum);
         const speed =
-          (0.34 + Math.min(2.4, direction.strength) * 0.62) * particle.pace;
+          (0.32 + visualStrength * 1.35) * particle.pace;
 
         particle.x += direction.x * speed;
         particle.y += direction.y * speed;
         particle.age += 1;
 
-        const normalizedStrength = Math.min(1, direction.strength / 1.8);
+        const normalizedStrength = visualStrength;
         const alpha =
           0.4 + normalizedStrength * 0.36 + (index % 9 === 0 ? 0.1 : 0);
-        const red = Math.round(142 + normalizedStrength * 52);
-        const blue = Math.round(218 + normalizedStrength * 27);
+        const red = mode === "wind" ? Math.round(142 + normalizedStrength * 52) : 85;
+        const green = mode === "wind" ? 255 : Math.round(190 + normalizedStrength * 45);
+        const blue = mode === "wind" ? Math.round(218 + normalizedStrength * 27) : 255;
         context.lineWidth = 0.9 + normalizedStrength * 0.58;
-        context.strokeStyle = `rgba(${red}, 255, ${blue}, ${alpha})`;
+        context.strokeStyle = `rgba(${red}, ${green}, ${blue}, ${alpha})`;
         context.beginPath();
         context.moveTo(px, py);
         context.lineTo(particle.x, particle.y);
@@ -1070,9 +1112,9 @@ function WindFieldCanvas({
       else map?.off("move", markViewChanged);
       window.cancelAnimationFrame(frame);
     };
-  }, [map, reduceMotion, view.lat, view.lng, view.zoom]);
+  }, [grid, map, mode, reduceMotion, view.lat, view.lng, view.zoom]);
 
-  return <canvas className="wind-field" ref={canvasRef} aria-hidden="true" />;
+  return <canvas className={`wind-field vector-${mode}`} ref={canvasRef} aria-hidden="true" />;
 }
 
 function drawEventGlyph(
@@ -1762,11 +1804,14 @@ export default function Home() {
     "idle" | "loading" | "ready" | "unavailable"
   >("idle");
   const [selectedEvent, setSelectedEvent] = useState<SelectedEvent | null>(null);
+  const [vectorGrids, setVectorGrids] = useState<Partial<Record<"wind" | "currents", VectorGrid>>>({});
+  const [vectorStatus, setVectorStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
   const [mapView, setMapView] = useState({ zoom: 1.52, lng: 180, lat: 8 });
   const mapContainerRef = useRef<MapContainerElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const wheelLockRef = useRef(false);
   const dragStartRef = useRef<number | null>(null);
+  const dragDirectionRef = useRef(1);
   const dragStepRef = useRef(0);
   const dragTargetRef = useRef(0);
   const dragMovedRef = useRef(false);
@@ -1776,6 +1821,11 @@ export default function Home() {
   const observationDate = useMemo(() => utcDate(2), []);
   const activeChannel = CHANNELS[activeIndex];
   const showsLatestObservation = Boolean(activeChannel.layer);
+  const activeVectorMode =
+    activeChannel.id === "wind" || activeChannel.id === "currents"
+      ? activeChannel.id
+      : null;
+  const activeVectorGrid = activeVectorMode ? vectorGrids[activeVectorMode] : undefined;
   const activeEffectMode: EffectMode | null =
     activeChannel.id === "rain" ||
     activeChannel.id === "heat" ||
@@ -1827,6 +1877,31 @@ export default function Home() {
     media.addEventListener("change", syncPreference);
     return () => media.removeEventListener("change", syncPreference);
   }, []);
+
+  useEffect(() => {
+    if (!activeVectorMode || vectorGrids[activeVectorMode]) return;
+    const controller = new AbortController();
+    const markLoading = window.setTimeout(() => setVectorStatus("loading"), 0);
+    const filename = activeVectorMode === "wind" ? "wind-latest.json" : "currents-latest.json";
+    fetch(`./data/${filename}`, { signal: controller.signal, cache: "no-store" })
+      .then((response) => {
+        if (!response.ok) throw new Error(`vector data unavailable: ${response.status}`);
+        return response.json() as Promise<VectorGridPayload>;
+      })
+      .then((payload) => {
+        if (controller.signal.aborted) return;
+        const grid = decodeVectorGrid(payload);
+        setVectorGrids((current) => ({ ...current, [activeVectorMode]: grid }));
+        setVectorStatus("ready");
+      })
+      .catch((error) => {
+        if ((error as Error).name !== "AbortError") setVectorStatus("unavailable");
+      });
+    return () => {
+      window.clearTimeout(markLoading);
+      controller.abort();
+    };
+  }, [activeVectorMode, vectorGrids]);
 
   useEffect(() => {
     if (
@@ -1934,7 +2009,7 @@ export default function Home() {
         event.preventDefault();
         moveChannel(-1);
       }
-      if (event.key >= "1" && event.key <= "6") {
+      if (event.key >= "1" && Number(event.key) <= CHANNEL_COUNT) {
         selectChannel(Number(event.key) - 1);
       }
     };
@@ -2081,7 +2156,7 @@ export default function Home() {
       "raster-opacity",
       activeChannel.id === "satellite"
         ? 1
-        : activeChannel.id === "wind"
+        : activeChannel.id === "wind" || activeChannel.id === "currents"
           ? 0.4
           : activeChannel.id === "events"
             ? 0.48
@@ -2317,7 +2392,7 @@ export default function Home() {
     const map = mapContainerRef.current?.__terrawatchMap ?? liveMap ?? mapRef.current;
     if (!map || !mapReady) return;
     const onEventClick = (event: MapMouseEvent) => {
-      if (activeIndexRef.current !== 5 || !map.getLayer("event-core")) return;
+      if (CHANNELS[activeIndexRef.current]?.id !== "events" || !map.getLayer("event-core")) return;
       const hitRadius = 18;
       const hitBox: [[number, number], [number, number]] = [
         [event.point.x - hitRadius, event.point.y - hitRadius],
@@ -2410,6 +2485,7 @@ export default function Home() {
 
   const onPointerDown = (event: React.PointerEvent<HTMLElement>) => {
     dragStartRef.current = event.clientY;
+    dragDirectionRef.current = event.pointerType === "touch" ? -1 : 1;
     dragStepRef.current = wheelPositionRef.current;
     dragTargetRef.current = wheelStepRef.current;
     dragMovedRef.current = false;
@@ -2419,7 +2495,8 @@ export default function Home() {
 
   const onPointerMove = (event: React.PointerEvent<HTMLElement>) => {
     if (dragStartRef.current === null) return;
-    const distance = dragStartRef.current - event.clientY;
+    const distance =
+      (dragStartRef.current - event.clientY) * dragDirectionRef.current;
     if (Math.abs(distance) > 7) dragMovedRef.current = true;
     const position = dragStepRef.current + distance / 54;
     wheelPositionRef.current = position;
@@ -2480,11 +2557,13 @@ export default function Home() {
         </div>
       )}
       <div className="map-stage" ref={mapContainerRef} aria-label="全球地球观测地图" />
-      {activeChannel.id === "wind" && (
-        <WindFieldCanvas
+      {activeVectorMode && activeVectorGrid && (
+        <VectorFieldCanvas
           map={mapInstance}
           view={mapView}
           reduceMotion={prefersReducedMotion}
+          grid={activeVectorGrid}
+          mode={activeVectorMode}
         />
       )}
       {activeEffectMode && (
@@ -2548,6 +2627,13 @@ export default function Home() {
             <small>FIXED CURRENT SNAPSHOT · NO TIME PLAYBACK</small>
           </div>
         )}
+        {activeVectorGrid && (
+          <div className="latest-readout">
+            <span>LATEST VECTOR ANALYSIS</span>
+            <time>{activeVectorGrid.validTime.replace("T", " ").replace("Z", " UTC")}</time>
+            <small>{activeVectorGrid.units} · {activeVectorGrid.latency}</small>
+          </div>
+        )}
       </section>
 
       <div className="reticle" aria-hidden="true">
@@ -2572,13 +2658,19 @@ export default function Home() {
         <dl>
           <div>
             <dt>数据源</dt>
-            <dd>{activeChannel.source}</dd>
+            <dd>{activeVectorGrid?.source ?? activeChannel.source}</dd>
           </div>
           <div>
             <dt>状态</dt>
             <dd>
               {activeChannel.id === "events"
                 ? eventStatus
+                : activeVectorMode
+                  ? vectorStatus === "loading"
+                    ? "正在读取最新矢量网格…"
+                    : vectorStatus === "unavailable"
+                      ? "真实数据暂不可用"
+                      : activeVectorGrid?.latency ?? activeChannel.latency
                 : showsLatestObservation
                   ? `${activeChannel.latency} · 仅显示最近可用观测`
                   : activeChannel.latency}
