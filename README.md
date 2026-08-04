@@ -73,7 +73,7 @@ npm run build
 
 ## 数据连接
 
-TERRAWATCH 的数据由访问者浏览器直接读取，不经过你的服务器。访问者网络需要能够连接以下公开数据源：
+默认构建的 TERRAWATCH 由访问者浏览器直接读取公开数据源。访问者网络需要能够连接以下服务：
 
 - NASA GIBS：卫星、云层、降水和地表温度
 - USGS：地震事件
@@ -81,6 +81,12 @@ TERRAWATCH 的数据由访问者浏览器直接读取，不经过你的服务器
 - CARTO / OpenStreetMap：暗色地名标注
 
 如果网站可以打开但个别图层空白，通常是访问者所在网络无法连接相应公开数据源。
+
+## 推荐：自托管近实时数据层
+
+如果你有自己的服务器，可以运行 `source/sync/terrawatch_sync.py` 作为常驻同步服务。它会按每类数据的实际节奏拉取并发布本地版本：事件默认每 4 小时、风场每 6 小时、洋流每日；上游没有变化时会使用 HTTP 条件请求，不会重复下载。
+
+前端可以改读你服务器的 `/data/events-latest.geojson`、`wind-latest.json` 和 `currents-latest.json`；NASA GIBS 与 CARTO 影像则通过你自己的 Nginx 磁盘缓存代理，避免给每一位访客都建立跨地区的第三方连接。完整安装、服务和 Nginx 配置见 [自托管同步说明](source/sync/README.md)。
 
 ## 说明
 

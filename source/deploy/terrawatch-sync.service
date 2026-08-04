@@ -1,0 +1,26 @@
+[Unit]
+Description=TERRAWATCH near-real-time data synchronizer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=terrawatch
+Group=terrawatch
+WorkingDirectory=/opt/terrawatch/source
+Environment=PYTHONUNBUFFERED=1
+Environment=TERRAWATCH_DATA_DIR=/var/lib/terrawatch/data
+Environment=TERRAWATCH_STATE_DIR=/var/lib/terrawatch/state
+Environment=TERRAWATCH_VECTOR_WORK_DIR=/var/lib/terrawatch/work/vector-data
+EnvironmentFile=-/etc/terrawatch/environment
+ExecStart=/opt/terrawatch/.venv/bin/python /opt/terrawatch/source/sync/terrawatch_sync.py --daemon --config /opt/terrawatch/source/sync/sources.json
+Restart=always
+RestartSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/terrawatch
+
+[Install]
+WantedBy=multi-user.target
