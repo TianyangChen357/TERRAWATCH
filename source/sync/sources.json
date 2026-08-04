@@ -1,0 +1,64 @@
+{
+  "schema": "terrawatch-sync-config-v1",
+  "jobs": [
+    {
+      "id": "events",
+      "type": "events",
+      "enabled": true,
+      "interval_seconds": 14400,
+      "retry_seconds": 900,
+      "keep_raw_snapshots": 30,
+      "output": "events-latest.geojson",
+      "feeds": [
+        {
+          "id": "usgs",
+          "url": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_day.geojson",
+          "timeout_seconds": 30,
+          "max_bytes": 8388608
+        },
+        {
+          "id": "eonet",
+          "url": "https://eonet.gsfc.nasa.gov/api/v3/events/geojson?status=open&limit=60",
+          "timeout_seconds": 30,
+          "max_bytes": 8388608
+        }
+      ]
+    },
+    {
+      "id": "wind",
+      "type": "command",
+      "enabled": true,
+      "interval_seconds": 21600,
+      "retry_seconds": 1800,
+      "timeout_seconds": 900,
+      "command": [
+        "{python}",
+        "scripts/update-vector-data.py",
+        "wind",
+        "--output-dir",
+        "{output_dir}"
+      ],
+      "outputs": [
+        "wind-latest.json"
+      ]
+    },
+    {
+      "id": "currents",
+      "type": "command",
+      "enabled": true,
+      "interval_seconds": 86400,
+      "retry_seconds": 3600,
+      "timeout_seconds": 1200,
+      "command": [
+        "{python}",
+        "scripts/update-vector-data.py",
+        "currents",
+        "--output-dir",
+        "{output_dir}"
+      ],
+      "outputs": [
+        "currents-latest.json"
+      ]
+    }
+  ]
+}

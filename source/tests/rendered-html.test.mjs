@@ -30,7 +30,8 @@ test("renders TERRAWATCH metadata and primary controls", async () => {
   const html = await response.text();
   assert.match(html, /<title>TERRAWATCH · Earth Observation Console<\/title>/);
   assert.match(html, />TERRAWATCH</);
-  assert.match(html, /TRUE-COLOR SATELLITE/);
+  assert.match(html, /EARTH EVENTS/);
   assert.match(html, /GLOBAL PRECIPITATION/);
   assert.match(html, /© OpenStreetMap contributors © CARTO/);
+  assert.match(html, /terrawatch-config\.js/);
 });

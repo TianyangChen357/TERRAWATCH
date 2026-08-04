@@ -67,6 +67,35 @@ type MapContainerElement = HTMLDivElement & {
   __terrawatchMap?: MapLibreMap;
 };
 
+type TerraWatchRuntimeConfig = {
+  selfHostedData?: boolean;
+  selfHostedTiles?: boolean;
+  dataOrigin?: string;
+};
+
+function runtimeConfig(): TerraWatchRuntimeConfig {
+  if (typeof window === "undefined") return {};
+  const config = (window as Window & { TERRAWATCH_CONFIG?: unknown }).TERRAWATCH_CONFIG;
+  return config && typeof config === "object" ? (config as TerraWatchRuntimeConfig) : {};
+}
+
+function dataOriginPath(path: string) {
+  const origin = runtimeConfig().dataOrigin?.trim().replace(/\/$/, "");
+  return origin ? `${origin}${path}` : path;
+}
+
+function selfHostedDataEnabled() {
+  return runtimeConfig().selfHostedData === true;
+}
+
+function selfHostedTilesEnabled() {
+  return runtimeConfig().selfHostedTiles === true;
+}
+
+function localDataFile(filename: string) {
+  return dataOriginPath(`/data/${filename}`);
+}
+
 const CHANNELS: Channel[] = [
   {
     id: "events",
@@ -380,6 +409,9 @@ function utcDate(daysAgo = 2) {
 
 function gibsTiles(layer: NonNullable<Channel["layer"]>, date: string) {
   const path = `wmts/epsg3857/best/${layer.id}/default/${date}/${layer.matrix}/{z}/{y}/{x}.${layer.format}`;
+  if (selfHostedTilesEnabled()) {
+    return [dataOriginPath(`/tiles/gibs/${path}`)];
+  }
   return ["a", "b", "c"].map(
     (server) => `https://gibs-${server}.earthdata.nasa.gov/${path}`,
   );
@@ -388,9 +420,30 @@ function gibsTiles(layer: NonNullable<Channel["layer"]>, date: string) {
 function blueMarbleTiles() {
   const path =
     "wmts/epsg3857/best/BlueMarble_NextGeneration/default/500m/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpeg";
+  if (selfHostedTilesEnabled()) {
+    return [dataOriginPath(`/tiles/gibs/${path}`)];
+  }
   return ["a", "b", "c"].map(
     (server) => `https://gibs-${server}.earthdata.nasa.gov/${path}`,
   );
+}
+
+function cartoLabelTiles() {
+  if (selfHostedTilesEnabled()) {
+    return [dataOriginPath("/tiles/carto/{z}/{x}/{y}@2x.png")];
+  }
+  return [
+    "https://a.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}@2x.png",
+    "https://b.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}@2x.png",
+    "https://c.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}@2x.png",
+  ];
+}
+
+function gibsWmsUrl(params: URLSearchParams) {
+  const path = `/wms/epsg4326/best/wms.cgi?${params.toString()}`;
+  return selfHostedTilesEnabled()
+    ? dataOriginPath(`/tiles/gibs${path}`)
+    : `https://gibs.earthdata.nasa.gov${path}`;
 }
 
 function gibsAnalysisImage(
@@ -411,7 +464,7 @@ function gibsAnalysisImage(
     BBOX: "-180,-85,180,85",
     TIME: date,
   });
-  return `https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?${params.toString()}`;
+  return gibsWmsUrl(params);
 }
 
 function hashUnit(value: string) {
@@ -1854,7 +1907,7 @@ export default function Home() {
         BBOX: `-90,${west},90,${east}`,
       });
       if (activeChannel.layer) params.set("TIME", observationDate);
-      return `https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?${params.toString()}`;
+      return gibsWmsUrl(params);
     };
     return [hemisphere(0, 180), hemisphere(-180, 0)];
   }, [activeChannel, observationDate]);
@@ -1883,7 +1936,7 @@ export default function Home() {
     const controller = new AbortController();
     const markLoading = window.setTimeout(() => setVectorStatus("loading"), 0);
     const filename = activeVectorMode === "wind" ? "wind-latest.json" : "currents-latest.json";
-    fetch(`./data/${filename}`, { signal: controller.signal, cache: "no-store" })
+    fetch(localDataFile(filename), { signal: controller.signal, cache: "no-store" })
       .then((response) => {
         if (!response.ok) throw new Error(`vector data unavailable: ${response.status}`);
         return response.json() as Promise<VectorGridPayload>;
@@ -2049,11 +2102,7 @@ export default function Home() {
           },
           labels: {
             type: "raster",
-            tiles: [
-              "https://a.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}@2x.png",
-              "https://b.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}@2x.png",
-              "https://c.basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}@2x.png",
-            ],
+            tiles: cartoLabelTiles(),
             tileSize: 256,
             attribution: "© OpenStreetMap contributors © CARTO",
           },
@@ -2208,91 +2257,112 @@ export default function Home() {
       setEventStatus("连接全球事件流…");
       setEventCount(null);
       try {
-        const [usgsResponse, eonetResponse] = await Promise.all([
-          fetch(
-            "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_day.geojson",
-            { signal: controller.signal },
-          ),
-          fetch("https://eonet.gsfc.nasa.gov/api/v3/events?status=open&limit=60", {
+        let collection: GeoJSON.FeatureCollection;
+        let synchronizationLabel: string;
+        if (selfHostedDataEnabled()) {
+          const response = await fetch(localDataFile("events-latest.geojson"), {
             signal: controller.signal,
-          }),
-        ]);
-        if (!usgsResponse.ok || !eonetResponse.ok) throw new Error("event stream unavailable");
-        const usgs = (await usgsResponse.json()) as GeoJSON.FeatureCollection;
-        const eonet = (await eonetResponse.json()) as {
-          events?: Array<{
-            id: string;
-            title: string;
-            categories?: Array<{ id?: string; title?: string }>;
-            geometry?: Array<{
-              date?: string;
-              type?: string;
-              coordinates?: [number, number];
+            cache: "no-store",
+          });
+          if (!response.ok) throw new Error("self-hosted event stream unavailable");
+          const localCollection = (await response.json()) as GeoJSON.FeatureCollection & {
+            metadata?: { generatedAt?: string; sourceErrors?: string[] };
+          };
+          if (localCollection.type !== "FeatureCollection" || !Array.isArray(localCollection.features)) {
+            throw new Error("self-hosted event stream is invalid");
+          }
+          collection = localCollection;
+          synchronizationLabel = localCollection.metadata?.sourceErrors?.length
+            ? "本地事件流已同步（部分源使用缓存）"
+            : "本地事件流已同步";
+        } else {
+          const [usgsResponse, eonetResponse] = await Promise.all([
+            fetch(
+              "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_day.geojson",
+              { signal: controller.signal },
+            ),
+            fetch("https://eonet.gsfc.nasa.gov/api/v3/events?status=open&limit=60", {
+              signal: controller.signal,
+            }),
+          ]);
+          if (!usgsResponse.ok || !eonetResponse.ok) throw new Error("event stream unavailable");
+          const usgs = (await usgsResponse.json()) as GeoJSON.FeatureCollection;
+          const eonet = (await eonetResponse.json()) as {
+            events?: Array<{
+              id: string;
+              title: string;
+              categories?: Array<{ id?: string; title?: string }>;
+              geometry?: Array<{
+                date?: string;
+                type?: string;
+                coordinates?: [number, number];
+              }>;
             }>;
-          }>;
-        };
+          };
 
-        const usgsFeatures = (usgs.features || []).map((feature) => {
-          const coordinates =
-            feature.geometry?.type === "Point" ? feature.geometry.coordinates : [];
-          const signalId = String(
-            feature.id ?? `usgs-${coordinates[0]}-${coordinates[1]}`,
-          );
-          const magnitude = Number(feature.properties?.mag);
-          const effectIntensity = Number.isFinite(magnitude)
-            ? Math.max(0.36, Math.min(1, (magnitude - 3.5) / 4))
-            : 0.5;
-          return {
-            ...feature,
-            properties: {
-              ...feature.properties,
-              kind: "earthquake",
-              signalId,
-              effectIntensity,
-              sourceLabel: "USGS",
-              eventColor: EVENT_VISUALS.earthquake.color,
-              eventTypeLabel: EVENT_VISUALS.earthquake.label,
-              detail: `M${feature.properties?.mag ?? "?"} · 深度 ${coordinates[2] ?? "待核实"} km`,
-            },
-          };
-        });
-        const eonetFeatures: GeoJSON.Feature[] = (eonet.events || []).flatMap((event) => {
-          const latest = event.geometry?.at(-1);
-          if (latest?.type !== "Point" || !Array.isArray(latest.coordinates)) return [];
-          const categoryTitles = (event.categories || [])
-            .map((category) => category.title?.trim())
-            .filter((title): title is string => Boolean(title));
-          const eventKind = classifyEventKind(categoryTitles, event.title);
-          const visual = EVENT_VISUALS[eventKind];
-          const intensityByKind: Partial<Record<EventKind, number>> = {
-            storm: 0.78,
-            wildfire: 0.72,
-            volcano: 0.7,
-            flood: 0.66,
-          };
-          return [
-            {
-              type: "Feature",
-              id: event.id,
-              geometry: { type: "Point", coordinates: latest.coordinates },
+          const usgsFeatures = (usgs.features || []).map((feature) => {
+            const coordinates =
+              feature.geometry?.type === "Point" ? feature.geometry.coordinates : [];
+            const signalId = String(
+              feature.id ?? `usgs-${coordinates[0]}-${coordinates[1]}`,
+            );
+            const magnitude = Number(feature.properties?.mag);
+            const effectIntensity = Number.isFinite(magnitude)
+              ? Math.max(0.36, Math.min(1, (magnitude - 3.5) / 4))
+              : 0.5;
+            return {
+              ...feature,
               properties: {
-                title: event.title,
-                kind: eventKind,
-                signalId: event.id,
-                effectIntensity: intensityByKind[eventKind] ?? 0.58,
-                sourceLabel: "NASA EONET",
-                eventColor: visual.color,
-                eventTypeLabel: visual.label,
-                time: latest.date ?? "",
-                detail: categoryTitles.join(" · ") || visual.label,
+                ...feature.properties,
+                kind: "earthquake",
+                signalId,
+                effectIntensity,
+                sourceLabel: "USGS",
+                eventColor: EVENT_VISUALS.earthquake.color,
+                eventTypeLabel: EVENT_VISUALS.earthquake.label,
+                detail: `M${feature.properties?.mag ?? "?"} · 深度 ${coordinates[2] ?? "待核实"} km`,
               },
-            },
-          ];
-        });
-        const collection: GeoJSON.FeatureCollection = {
-          type: "FeatureCollection",
-          features: [...usgsFeatures, ...eonetFeatures],
-        };
+            };
+          });
+          const eonetFeatures: GeoJSON.Feature[] = (eonet.events || []).flatMap((event) => {
+            const latest = event.geometry?.at(-1);
+            if (latest?.type !== "Point" || !Array.isArray(latest.coordinates)) return [];
+            const categoryTitles = (event.categories || [])
+              .map((category) => category.title?.trim())
+              .filter((title): title is string => Boolean(title));
+            const eventKind = classifyEventKind(categoryTitles, event.title);
+            const visual = EVENT_VISUALS[eventKind];
+            const intensityByKind: Partial<Record<EventKind, number>> = {
+              storm: 0.78,
+              wildfire: 0.72,
+              volcano: 0.7,
+              flood: 0.66,
+            };
+            return [
+              {
+                type: "Feature",
+                id: event.id,
+                geometry: { type: "Point", coordinates: latest.coordinates },
+                properties: {
+                  title: event.title,
+                  kind: eventKind,
+                  signalId: event.id,
+                  effectIntensity: intensityByKind[eventKind] ?? 0.58,
+                  sourceLabel: "NASA EONET",
+                  eventColor: visual.color,
+                  eventTypeLabel: visual.label,
+                  time: latest.date ?? "",
+                  detail: categoryTitles.join(" · ") || visual.label,
+                },
+              },
+            ];
+          });
+          collection = {
+            type: "FeatureCollection",
+            features: [...usgsFeatures, ...eonetFeatures],
+          };
+          synchronizationLabel = "事件流已同步";
+        }
         const signals: SignalAnchor[] = collection.features.flatMap(
           (feature, index) => {
             if (feature.geometry?.type !== "Point") return [];
@@ -2371,7 +2441,7 @@ export default function Home() {
           });
         }
         setEventCount(collection.features.length);
-        setEventStatus("事件流已同步");
+        setEventStatus(synchronizationLabel);
       } catch (error) {
         if ((error as Error).name !== "AbortError") {
           setEventStatus("事件流暂时不可用");

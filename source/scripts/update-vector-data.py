@@ -19,8 +19,11 @@ from eccodes import codes_get, codes_get_values, codes_grib_new_from_file, codes
 from netCDF4 import Dataset
 
 ROOT = Path(__file__).resolve().parents[1]
-OUTPUT_DIR = ROOT / "public" / "data"
-WORK_DIR = ROOT / ".vector-data"
+DEFAULT_OUTPUT_DIR = ROOT / "public" / "data"
+DEFAULT_WORK_DIR = ROOT / ".vector-data"
+OUTPUT_DIR = DEFAULT_OUTPUT_DIR
+WORK_DIR = DEFAULT_WORK_DIR
+DEPLOYED_OUTPUT_DIR: Path | None = ROOT / "out" / "data"
 SCHEMA = "terrawatch-vector-grid-v1"
 CMR_URL = "https://cmr.earthdata.nasa.gov/search/granules.json"
 OSCAR_COLLECTION = "C2102958977-POCLOUD"
@@ -75,8 +78,8 @@ def write_grid(
     temporary = output.with_suffix(".tmp")
     temporary.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
     temporary.replace(output)
-    deployed_output = ROOT / "out" / "data" / output.name
-    if (ROOT / "out").exists():
+    deployed_output = DEPLOYED_OUTPUT_DIR / output.name if DEPLOYED_OUTPUT_DIR else None
+    if deployed_output and (ROOT / "out").exists():
         deployed_output.parent.mkdir(parents=True, exist_ok=True)
         deployed_temporary = deployed_output.with_suffix(".tmp")
         shutil.copyfile(output, deployed_temporary)
@@ -259,9 +262,29 @@ def update_currents() -> None:
 
 
 def main() -> int:
+    global OUTPUT_DIR, WORK_DIR, DEPLOYED_OUTPUT_DIR
     parser = argparse.ArgumentParser()
     parser.add_argument("dataset", choices=("wind", "currents", "all"), nargs="?", default="all")
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path(os.environ.get("TERRAWATCH_DATA_DIR", DEFAULT_OUTPUT_DIR)),
+        help="Directory where the browser data files are published.",
+    )
+    parser.add_argument(
+        "--work-dir",
+        type=Path,
+        default=Path(os.environ.get("TERRAWATCH_VECTOR_WORK_DIR", DEFAULT_WORK_DIR)),
+        help="Directory for temporary GRIB and NetCDF downloads.",
+    )
     args = parser.parse_args()
+    OUTPUT_DIR = args.output_dir.resolve()
+    WORK_DIR = args.work_dir.resolve()
+    DEPLOYED_OUTPUT_DIR = (
+        ROOT / "out" / "data"
+        if OUTPUT_DIR == DEFAULT_OUTPUT_DIR.resolve()
+        else None
+    )
     if args.dataset in ("wind", "all"):
         update_wind()
     if args.dataset in ("currents", "all"):

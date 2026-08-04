@@ -1,0 +1,6 @@
+# The events synchronizer itself only uses the Python standard library.
+# Install these optional packages when the wind and currents jobs are enabled.
+numpy
+requests
+eccodes
+netCDF4
